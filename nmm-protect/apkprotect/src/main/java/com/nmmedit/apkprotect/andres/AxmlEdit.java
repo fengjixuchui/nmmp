@@ -26,6 +26,32 @@ public class AxmlEdit {
         }
         return "";
     }
+    @Nonnull
+    public static int  getMinSdk(@Nonnull byte[] manifestBytes) {
+        ResourceFile file = new ResourceFile(manifestBytes);
+        for (Chunk chunk : file.getChunks()) {
+            if (chunk instanceof XmlChunk) {
+                XmlChunk xmlChunk = (XmlChunk) chunk;
+                for (Chunk subChunk : xmlChunk.getChunks().values()) {
+                    if (subChunk instanceof XmlStartElementChunk) {
+                        XmlStartElementChunk startElementChunk = (XmlStartElementChunk) subChunk;
+                        if (startElementChunk.getName().equals("uses-sdk")) {
+                            List<XmlAttribute> attributes = startElementChunk.getAttributes();
+                            for (XmlAttribute attribute : attributes) {
+                                ResourceValue typedValue = attribute.typedValue();
+                                if (attribute.name().equals("minSdkVersion") &&
+                                        typedValue.type() == ResourceValue.Type.INT_DEC) {
+                                    return attribute.typedValue().data();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        //最低按安卓5
+        return 21;
+    }
 
     @Nonnull
     public static String getPackageName(@Nonnull byte[] manifestBytes) {
@@ -73,6 +99,7 @@ public class AxmlEdit {
                 for (Chunk subChunk : xmlChunk.getChunks().values()) {
                     if (subChunk instanceof XmlStartElementChunk) {
                         XmlStartElementChunk startElementChunk = (XmlStartElementChunk) subChunk;
+                        //todo 可能还需要在<application>节点插入 android:extractNativeLibs="true" 不然本地库无法压缩放入apk
                         if (modifyApplicationName(stringPoolChunk, startElementChunk, newName)) {
                             modified = true;
                             break;
@@ -121,8 +148,30 @@ public class AxmlEdit {
             }
             //application节点不存在name属性，创建后添加
             XmlAttribute newAttr = createXmlNameAttribute(stringPoolChunk, startElement, newAppName);
-            //目前不知道原因，直接追加在后面无效，但是apk安装又不报错
-            startElement.addAttribute(0, newAttr);
+            // 属性有顺序，通用插入属性处理应该要根据 com.android.internal.R 里的定义对属性进行排序，
+            // 这里只是插入name属性，所以简单的查找索引位置然后插入
+            // android:theme
+            // public static final int AndroidManifestApplication_theme=0;
+            // android:label
+            // public static final int AndroidManifestApplication_label=1;
+            // android:icon
+            // public static final int AndroidManifestApplication_icon=2;
+            // android:name
+            // public static final int AndroidManifestApplication_name=3;
+
+            int nameAttrIndex = 0;
+            for (XmlAttribute attribute : attributes) {
+                //name属性在这些属性之后
+                if ("theme".equals(attribute.name())
+                        || "label".equals(attribute.name())
+                        || "icon".equals(attribute.name())
+                ) {
+                    nameAttrIndex++;
+                }
+            }
+
+            startElement.addAttribute(nameAttrIndex, newAttr);
+
             return true;
 
         }

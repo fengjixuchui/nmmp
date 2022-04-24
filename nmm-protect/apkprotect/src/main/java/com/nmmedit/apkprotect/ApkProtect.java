@@ -5,6 +5,7 @@ import com.nmmedit.apkprotect.data.Prefs;
 import com.nmmedit.apkprotect.dex2c.Dex2c;
 import com.nmmedit.apkprotect.dex2c.DexConfig;
 import com.nmmedit.apkprotect.dex2c.GlobalDexConfig;
+import com.nmmedit.apkprotect.dex2c.converter.ClassAnalyzer;
 import com.nmmedit.apkprotect.dex2c.converter.instructionrewriter.InstructionRewriter;
 import com.nmmedit.apkprotect.dex2c.converter.structs.RegisterNativesUtilClassDef;
 import com.nmmedit.apkprotect.dex2c.filters.ClassAndMethodFilter;
@@ -19,6 +20,7 @@ import org.jf.dexlib2.iface.DexFile;
 import org.jf.dexlib2.writer.io.FileDataStore;
 import org.jf.dexlib2.writer.pool.DexPool;
 
+import javax.annotation.Nonnull;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -36,10 +38,13 @@ public class ApkProtect {
     private final ApkVerifyCodeGenerator apkVerifyCodeGenerator;
     private final ClassAndMethodFilter filter;
 
+    private final ClassAnalyzer classAnalyzer;
+
     private ApkProtect(ApkFolders apkFolders,
                        InstructionRewriter instructionRewriter,
                        ApkVerifyCodeGenerator apkVerifyCodeGenerator,
-                       ClassAndMethodFilter filter
+                       ClassAndMethodFilter filter,
+                       ClassAnalyzer classAnalyzer
     ) {
         this.apkFolders = apkFolders;
 
@@ -47,6 +52,7 @@ public class ApkProtect {
 
         this.apkVerifyCodeGenerator = apkVerifyCodeGenerator;
         this.filter = filter;
+        this.classAnalyzer = classAnalyzer;
 
     }
 
@@ -60,10 +66,7 @@ public class ApkProtect {
                 //错误apk文件
                 throw new RuntimeException("Not is apk");
             }
-            String applicationClass = AxmlEdit.getApplicationName(manifestBytes);
-            if (applicationClass.equals("")) {
-                applicationClass = ANDROID_APP_APPLICATION;
-            }
+
             final String packageName = AxmlEdit.getPackageName(manifestBytes);
 
             //生成一些需要改变的c代码(随机opcode后的头文件及apk验证代码等)
@@ -74,10 +77,28 @@ public class ApkProtect {
             if (files.isEmpty()) {
                 throw new RuntimeException("No classes.dex");
             }
+            final int minSdk = AxmlEdit.getMinSdk(manifestBytes);
+
+            classAnalyzer.setMinSdk(minSdk);
+
+            if (minSdk < 23) {
+                //todo 加载android5的sdk,以保证能正确分析一些有问题的代码
+            }
+
+            //
+
+
+            //先加载apk包含的所有dex文件,以便分析一些有问题的代码
+            for (File file : files) {
+                classAnalyzer.loadDexFile(file);
+            }
+
+
             //globalConfig里面configs顺序和classesN.dex文件列表一样
-            final GlobalDexConfig globalConfig = Dex2c.handleDexes(files,
+            final GlobalDexConfig globalConfig = Dex2c.handleAllDex(files,
                     filter,
                     instructionRewriter,
+                    classAnalyzer,
                     apkFolders.getCodeGeneratedDir());
 
 
@@ -85,44 +106,29 @@ public class ApkProtect {
             final Set<String> mainDexClassTypeSet = new HashSet<>();
             //todo 可能需要通过外部配置来保留主dex需要的class
 
-            //application class 继承关系
-            final List<String> appClassTypes = getApplicationClassesFromMainDex(globalConfig, applicationClass);
-
-            mainDexClassTypeSet.addAll(appClassTypes);
 
             //在处理过的class的静态初始化方法里插入调用注册本地方法的指令
             //static {
             //    NativeUtils.initClass(0);
             //}
-            final List<File> outDexFiles = injectInstructionAndWriteToFile(
+
+            final ArrayList<File> outDexFiles = injectInstructionAndWriteToFile(
                     globalConfig,
                     mainDexClassTypeSet,
                     60000,
                     apkFolders.getTempDexDir());
 
-            //主dex里处理so加载问题
-            File mainDex = outDexFiles.get(0);
-
-            //Application对应的
-            final String appName;
-            if (appClassTypes.isEmpty()) {
-                appName = ANDROID_APP_APPLICATION;
-            } else {
-                final String s = appClassTypes.get(appClassTypes.size() - 1);
-                appName = s.substring(1, s.length() - 1).replace('/', '.');
-            }
-
-
-            //处理AndroidManifest.xml文件
-            final File newManifestFile = handleApplicationClass(
-                    manifestBytes,
-                    appName,
-                    mainDex,
-                    globalConfig,
-                    apkFolders.getOutRootDir());
 
             final Map<String, List<File>> nativeLibs = generateNativeLibs(apkFolders);
 
+            File mainDex = outDexFiles.get(0);
+
+            final File newManDex = internNativeUtilClassDef(
+                    mainDex,
+                    globalConfig,
+                    BuildNativeLib.NMMP_NAME);
+            //替换为新的dex
+            outDexFiles.set(0, newManDex);
 
             try (
                     final ZipInputStream zipInput = new ZipInputStream(new FileInputStream(apkFile));
@@ -131,7 +137,9 @@ public class ApkProtect {
                 zipCopy(zipInput, apkFolders.getZipExtractTempDir(), zipOutput);
 
                 //add AndroidManifest.xml
-                addFileToZip(zipOutput, newManifestFile, new ZipEntry(ANDROID_MANIFEST_XML));
+                addInputStreamToZip(zipOutput,
+                        new ByteArrayInputStream(manifestBytes),
+                        new ZipEntry(ANDROID_MANIFEST_XML));
 
                 //add classesX.dex
                 for (File file : outDexFiles) {
@@ -160,6 +168,16 @@ public class ApkProtect {
         zipOutput.putNextEntry(zipEntry);
         try (FileInputStream input = new FileInputStream(file);) {
             FileUtils.copyStream(input, zipOutput);
+        }
+        zipOutput.closeEntry();
+    }
+
+    private void addInputStreamToZip(ZipOutputStream zipOutput, InputStream inputStream, ZipEntry zipEntry) throws IOException {
+        zipOutput.putNextEntry(zipEntry);
+        try {
+            FileUtils.copyStream(inputStream, zipOutput);
+        } finally {
+            inputStream.close();
         }
         zipOutput.closeEntry();
     }
@@ -248,16 +266,17 @@ public class ApkProtect {
 
     private void generateCSources(String packageName) throws IOException {
         final File vmsrcFile = new File(FileUtils.getHomePath(), "tools/vmsrc.zip");
-        if (!vmsrcFile.exists()) {
-            vmsrcFile.getParentFile().mkdirs();
-            //copy vmsrc.zip to external directory
-            try (
-                    InputStream inputStream = ApkProtect.class.getResourceAsStream("/vmsrc.zip");
-                    final FileOutputStream outputStream = new FileOutputStream(vmsrcFile);
-            ) {
-                FileUtils.copyStream(inputStream, outputStream);
-            }
+        //每次强制从资源里复制出来
+//        if (!vmsrcFile.exists()) {
+        vmsrcFile.getParentFile().mkdirs();
+        //copy vmsrc.zip to external directory
+        try (
+                InputStream inputStream = ApkProtect.class.getResourceAsStream("/vmsrc.zip");
+                final FileOutputStream outputStream = new FileOutputStream(vmsrcFile);
+        ) {
+            FileUtils.copyStream(inputStream, outputStream);
         }
+//        }
         final List<File> cSources = ApkUtils.extractFiles(vmsrcFile, ".*", apkFolders.getDex2cSrcDir());
 
         //处理指令及apk验证,生成新的c文件
@@ -268,6 +287,9 @@ public class ApkProtect {
             } else if (source.getName().endsWith("apk_verifier.c")) {
                 //根据公钥数据生成签名验证代码
                 writeApkVerifierFile(packageName, source, apkVerifyCodeGenerator);
+            } else if (source.getName().equals("CMakeLists.txt")) {
+                //处理cmake里配置的本地库名
+                writeCmakeFile(source, BuildNativeLib.NMMP_NAME);
             }
         }
     }
@@ -342,6 +364,24 @@ public class ApkProtect {
         }
     }
 
+
+    private static void writeCmakeFile(File cmakeTemp, String libName) throws IOException {
+        final BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(
+                new FileInputStream(cmakeTemp), StandardCharsets.UTF_8));
+
+        String lines = bufferedReader.lines().collect(Collectors.joining("\n"));
+        //定位cmake里的语句,防止替换错误
+        String libNameFormat = "set\\(LIBNAME_PLACEHOLDER \"%s\"\\)";
+
+        //替换原本libname
+        lines = lines.replaceAll(String.format(libNameFormat, "nmmp"), String.format(libNameFormat, libName));
+
+        try (FileWriter fileWriter = new FileWriter(cmakeTemp)) {
+            fileWriter.write(lines);
+        }
+    }
+
+
     private static File dexWriteToFile(DexPool dexPool, int index, File dexOutDir) throws IOException {
         if (!dexOutDir.exists()) dexOutDir.mkdirs();
 
@@ -403,13 +443,13 @@ public class ApkProtect {
      * @return
      * @throws IOException
      */
-    private static List<File> injectInstructionAndWriteToFile(GlobalDexConfig globalConfig,
-                                                              Set<String> mainClassSet,
-                                                              int maxPoolSize,
-                                                              File dexOutDir
+    private static ArrayList<File> injectInstructionAndWriteToFile(GlobalDexConfig globalConfig,
+                                                                   Set<String> mainClassSet,
+                                                                   int maxPoolSize,
+                                                                   File dexOutDir
     ) throws IOException {
 
-        final List<File> dexFiles = new ArrayList<>();
+        final ArrayList<File> dexFiles = new ArrayList<>();
 
         DexPool lastDexPool = new DexPool(Opcodes.getDefault());
 
@@ -424,7 +464,8 @@ public class ApkProtect {
 
             for (ClassDef classDef : dexNativeFile.getClasses()) {
                 if (mainClassSet.contains(classDef.getType())) {
-                    Dex2c.internClass(config, lastDexPool, classDef);
+                    //可能保留的类太多,导超出致dex引用,又没再接收返回的dex而导致丢失class
+                    Dex2c.injectCallRegisterNativeInsns(config, lastDexPool, mainClassSet, maxPoolSize);
                 }
             }
 
@@ -463,43 +504,33 @@ public class ApkProtect {
     }
 
     /**
-     * @param manifestBytes        二进制androidManifest.xml文件内容
-     * @param applicationClassName application对应的class全限定名
-     * @param mainDex              主dex文件
-     * @param outDir               处理后输出androidManifest.xml的目录
-     * @return 返回新二进制xml文件
-     * @throws IOException
+     * 复制dex里所有类到新的dex里
+     *
+     * @param oldDexFile 原dex
+     * @param newDex     目标dex
      */
-    private static File handleApplicationClass(byte[] manifestBytes,
-                                               String applicationClassName,
-                                               File mainDex,
-                                               GlobalDexConfig globalConfig,
-                                               File outDir) throws IOException {
-        String newAppClassName;
-        byte[] newManifest = manifestBytes;
-        if (applicationClassName.equals(ANDROID_APP_APPLICATION)) {
-            newAppClassName = "com.nmmedit.protect.LoadLibApp";
-
-            //修改AndroidManifest.xml里application对应的class路径
-            byte[] bytes = AxmlEdit.renameApplicationName(manifestBytes, newAppClassName);
-            if (bytes != null) {
-                newManifest = bytes;
-            }
-        } else {
-            newAppClassName = applicationClassName;
+    public static void copyDex(@Nonnull DexFile oldDexFile,
+                               @Nonnull DexPool newDex) {
+        for (ClassDef classDef : oldDexFile.getClasses()) {
+            newDex.internClass(classDef);
         }
+    }
 
-        //添加android.app.Application的子类
+    //在主dex里增加NativeUtil类
+    //返回处理后的dex文件
+    private static File internNativeUtilClassDef(@Nonnull File mainDex,
+                                                 @Nonnull GlobalDexConfig globalConfig,
+                                                 @Nonnull String libName) throws IOException {
+
 
         DexFile mainDexFile = DexBackedDexFile.fromInputStream(
                 Opcodes.getDefault(),
                 new BufferedInputStream(new FileInputStream(mainDex)));
+
         DexPool newDex = new DexPool(Opcodes.getDefault());
 
-        Dex2c.addApplicationClass(
-                mainDexFile,
-                newDex,
-                classDotNameToType(newAppClassName));
+
+        copyDex(mainDexFile, newDex);
 
         final ArrayList<String> nativeMethodNames = new ArrayList<>();
         for (DexConfig config : globalConfig.getConfigs()) {
@@ -509,39 +540,25 @@ public class ApkProtect {
 
         newDex.internClass(
                 new RegisterNativesUtilClassDef("L" + globalConfig.getConfigs().get(0).getRegisterNativesClassName() + ";",
-                        nativeMethodNames));
+                        nativeMethodNames, libName));
 
-        final File newFile = new File(mainDex.getParent(), ".temp.dex");
+        final File injectLoadLib = new File(mainDex.getParent(), "injectLoadLib");
+        if (!injectLoadLib.exists()) injectLoadLib.mkdirs();
+
+        final File newFile = new File(injectLoadLib, mainDex.getName());
         newDex.writeTo(new FileDataStore(newFile));
 
-        mainDex.delete();
-        if (!newFile.renameTo(mainDex)) {
-            throw new RuntimeException("Can't handle main dex " + mainDex);
-        }
-
-        if (!mainDex.exists()) {
-            throw new RuntimeException("No main dex: " + mainDex);
-        }
-
-
-        //写入新manifest文件
-        File newManifestFile = new File(outDir, ANDROID_MANIFEST_XML);
-        try (
-                FileOutputStream output = new FileOutputStream(newManifestFile);
-        ) {
-            output.write(newManifest);
-        }
-        return newManifestFile;
+        return newFile;
     }
 
-    //只解压不需要处理的文件,同时计算crc32
-    private static HashMap<ZipEntry, FileObj> zipExtractNeedCopy(ZipInputStream zipInputStream, File outDir) throws IOException {
+    //只解压不需要处理的文件
+    private static HashMap<ZipEntry, File> zipExtractNeedCopy(ZipInputStream zipInputStream, File outDir) throws IOException {
         //除去一些需要修改的文件
         final Pattern regex = Pattern.compile(
                 "classes(\\d)*\\.dex" +
                         "|META-INF/.*\\.(RSA|DSA|EC|SF|MF)" +
                         "|AndroidManifest\\.xml");
-        final HashMap<ZipEntry, FileObj> entryNameFileMap = new HashMap<>();
+        final HashMap<ZipEntry, File> entryNameFileMap = new HashMap<>();
         ZipEntry entry;
         while ((entry = zipInputStream.getNextEntry()) != null) {
             if (entry.isDirectory()
@@ -557,8 +574,8 @@ public class ApkProtect {
                 file.getParentFile().mkdirs();
             }
             try (final FileOutputStream out = new FileOutputStream(file)) {
-                final long crc = copyStreamCalcCrc32(zipInputStream, out);
-                entryNameFileMap.put(entry, new FileObj(file, crc));
+                FileUtils.copyStream(zipInputStream, out);
+                entryNameFileMap.put(entry, file);
             }
         }
 
@@ -568,26 +585,39 @@ public class ApkProtect {
     private static void zipCopy(ZipInputStream zipInputStream, File tempDir, ZipOutputStream zipOutputStream) throws IOException {
 
         //解压需要从旧zip复制到新zip的文件
-        final HashMap<ZipEntry, FileObj> entries = zipExtractNeedCopy(zipInputStream, tempDir);
-        for (Map.Entry<ZipEntry, FileObj> entryFile : entries.entrySet()) {
+        final HashMap<ZipEntry, File> entries = zipExtractNeedCopy(zipInputStream, tempDir);
+        for (Map.Entry<ZipEntry, File> entryFile : entries.entrySet()) {
             final ZipEntry entry = entryFile.getKey();
-            final FileObj fileObj = entryFile.getValue();
+            final File file = entryFile.getValue();
 
 
             final ZipEntry zipEntry = new ZipEntry(entry.getName());
             if (entry.getMethod() == ZipEntry.STORED) {//不压缩只储存数据
+                final long length = file.length();
                 zipEntry.setMethod(ZipEntry.STORED);
-                zipEntry.setCrc(fileObj.crc32);
-                zipEntry.setSize(fileObj.file.length());
-                zipEntry.setCompressedSize(fileObj.file.length());
+                zipEntry.setCrc(calcCrc32(file));
+                zipEntry.setSize(length);
+                zipEntry.setCompressedSize(length);
             }
 
             zipOutputStream.putNextEntry(zipEntry);
 
-            try (final FileInputStream fileIn = new FileInputStream(fileObj.file)) {
+            try (final FileInputStream fileIn = new FileInputStream(file)) {
                 FileUtils.copyStream(fileIn, zipOutputStream);
             }
             zipOutputStream.closeEntry();
+        }
+    }
+
+    private static long calcCrc32(File file) throws IOException {
+        try (InputStream inputStream = new FileInputStream(file)) {
+            final byte[] buf = new byte[1024 * 4];
+            final CRC32 crc32 = new CRC32();
+            int len;
+            while ((len = inputStream.read(buf, 0, buf.length)) != -1) {
+                crc32.update(buf, 0, len);
+            }
+            return crc32.getValue();
         }
     }
 
@@ -611,33 +641,13 @@ public class ApkProtect {
         return "L" + classDotName.replace('.', '/') + ";";
     }
 
-    private static long copyStreamCalcCrc32(InputStream in, OutputStream out) throws IOException {
-        final CRC32 crc32 = new CRC32();
-        byte[] buf = new byte[4 * 1024];
-        int len;
-        while ((len = in.read(buf)) != -1) {
-            out.write(buf, 0, len);
-            crc32.update(buf, 0, len);
-        }
-        return crc32.getValue();
-    }
-
-
-    private static class FileObj {
-        private final File file;
-        private final long crc32;
-
-        FileObj(File file, long crc32) {
-            this.file = file;
-            this.crc32 = crc32;
-        }
-    }
 
     public static class Builder {
         private final ApkFolders apkFolders;
         private InstructionRewriter instructionRewriter;
         private ApkVerifyCodeGenerator apkVerifyCodeGenerator;
         private ClassAndMethodFilter filter;
+        private ClassAnalyzer classAnalyzer;
 
 
         public Builder(ApkFolders apkFolders) {
@@ -659,11 +669,19 @@ public class ApkProtect {
             return this;
         }
 
+        public Builder setClassAnalyzer(ClassAnalyzer classAnalyzer) {
+            this.classAnalyzer = classAnalyzer;
+            return this;
+        }
+
         public ApkProtect build() {
             if (instructionRewriter == null) {
                 throw new RuntimeException("instructionRewriter == null");
             }
-            return new ApkProtect(apkFolders, instructionRewriter, apkVerifyCodeGenerator, filter);
+            if (classAnalyzer == null) {
+                throw new RuntimeException("classAnalyzer==null");
+            }
+            return new ApkProtect(apkFolders, instructionRewriter, apkVerifyCodeGenerator, filter, classAnalyzer);
         }
     }
 }

@@ -8,6 +8,13 @@ import java.util.Arrays;
 import java.util.List;
 
 public class BuildNativeLib {
+    //库名称
+    public static final String NMMP_NAME = "nmmp";
+
+    //
+    //虚拟机库名称,如果cmake里配置为静态库,这个可以忽略
+    public static final String VM_NAME = "nmmvm";
+
 
     //编译出native lib，同时返回最后的so文件
     public static List<File> build(@NotNull CMakeOptions options) throws IOException {
@@ -26,9 +33,9 @@ public class BuildNativeLib {
         final List<File> sharedObjectPath = options.getSharedObjectFile();
         for (File file : sharedObjectPath) {
             execCmd(Arrays.asList(
-                    options.getStripBinaryPath(),
-                    "--strip-unneeded",
-                    file.getAbsolutePath()
+                            options.getStripBinaryPath(),
+                            "--strip-unneeded",
+                            file.getAbsolutePath()
                     )
             );
         }
@@ -137,23 +144,8 @@ public class BuildNativeLib {
         }
 
         public String getStripBinaryPath() {
-            final String abi = getAbi();
-            switch (abi) {
-                case "armeabi-v7a":
-                    return new File(getNdkHome(), "/toolchains/arm-linux-androideabi-4.9/prebuilt/" +
-                            Prefs.osName() + "/bin/arm-linux-androideabi-strip").getAbsolutePath();
-                case "arm64-v8a":
-                    return new File(getNdkHome(), "/toolchains/aarch64-linux-android-4.9/prebuilt/" +
-                            Prefs.osName() + "/bin/aarch64-linux-android-strip").getAbsolutePath();
-                case "x86":
-                    return new File(getNdkHome(), "/toolchains/x86-4.9/prebuilt/" +
-                            Prefs.osName() + "/bin/i686-linux-android-strip").getAbsolutePath();
-                case "x86_64":
-                    return new File(getNdkHome(), "/toolchains/x86_64-4.9/prebuilt/" +
-                            Prefs.osName() + "/bin/x86_64-linux-android-strip").getAbsolutePath();
-            }
-            //不支持arm和x86以外的abi
-            throw new RuntimeException("Unsupported abi " + abi);
+            return new File(getNdkHome(), Prefs.ndkToolchains() + "/" +
+                    Prefs.ndkAbi() + "/" + Prefs.ndkStrip()).getAbsolutePath();
         }
 
         public String getCmakeBinaryPath() {
@@ -187,19 +179,23 @@ public class BuildNativeLib {
         //最后输出的so文件
         public List<File> getSharedObjectFile() {
             //linux,etc.
-            File vmSo = new File(getLibOutputDir(), "libnmmvm.so");
-            File mpSo = new File(getLibOutputDir(), "libnmmp.so");
+            final String vmLibName = "lib" + VM_NAME + ".so";
+
+            final String nmmpLibName = "lib" + NMMP_NAME + ".so";
+
+            File vmSo = new File(getLibOutputDir(), vmLibName);
+            File mpSo = new File(getLibOutputDir(), nmmpLibName);
 
             if (!vmSo.exists()) {
                 //windows
-                vmSo = new File(getBuildPath(), "vm/libnmmvm.so");
+                vmSo = new File(getBuildPath(), "vm/" + vmLibName);
             }
             if (!vmSo.exists()) {
                 throw new RuntimeException("Not Found so: " + vmSo.getAbsolutePath());
             }
 
             if (!mpSo.exists()) {
-                mpSo = new File(getBuildPath(), "libnmmp.so");
+                mpSo = new File(getBuildPath(), nmmpLibName);
             }
             if (!mpSo.exists()) {
                 throw new RuntimeException("Not Found so: " + mpSo.getAbsolutePath());

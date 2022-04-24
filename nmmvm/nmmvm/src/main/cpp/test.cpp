@@ -847,7 +847,7 @@ JNIEXPORT jobject Java_com_nmmedit_vm_FieldTest_getObj0
 
     jobject objectField = env->GetStaticObjectField(fieldTestCls, fieldId);
 
-    ALOGD("obj=%p",objectField);
+    ALOGD("obj=%p", objectField);
 
     return objectField;
 }
@@ -864,12 +864,174 @@ JNIEXPORT jint Java_com_nmmedit_vm_FieldTest_getInt0
 
     jint objectField2 = env->GetStaticIntField(clsA, fieldIdA);
 
-    ALOGD("int=%d",objectField);
+    ALOGD("int=%d", objectField);
 
     return objectField;
 }
 
 
+JNIEXPORT void Java_com_nmmedit_vm_VmTest_throwNull0
+        (JNIEnv *env, jclass clazz) {
+
+    const DexCode *dexCode = findDexCode("Lcom/nmmedit/vm/VmTest;", "throwNull");
+    if (dexCode == NULL) {
+        return;
+    }
+
+    u2 registersSize = dexCode->registersSize;
+
+    regptr_t *regs = (regptr_t *) calloc(registersSize, sizeof(regptr_t));
+    u1 *reg_flags = (u1 *) calloc(registersSize, sizeof(u1));
+
+    const u2 *insns = dexCode->insns;
+    u4 insnsSize = dexCode->insnsSize;
+    const vmCode code = {
+            .insns=insns,
+            .insnsSize=insnsSize,
+            .regs=regs,
+            .reg_flags=reg_flags,
+            .triesHandlers=NULL
+    };
+    jvalue value = vmInterpret(env, &code, &dvmResolver);
+
+}
+
+JNIEXPORT jboolean Java_com_nmmedit_vm_VmTest_constString0
+        (JNIEnv *env, jclass clazz) {
+
+    const DexCode *dexCode = findDexCode("Lcom/nmmedit/vm/VmTest;", "constString");
+    if (dexCode == NULL) {
+        return JNI_FALSE;
+    }
+
+    u2 registersSize = dexCode->registersSize;
+
+    regptr_t *regs = (regptr_t *) calloc(registersSize, sizeof(regptr_t));
+    u1 *reg_flags = (u1 *) calloc(registersSize, sizeof(u1));
+
+    const u2 *insns = dexCode->insns;
+    u4 insnsSize = dexCode->insnsSize;
+    const vmCode code = {
+            .insns=insns,
+            .insnsSize=insnsSize,
+            .regs=regs,
+            .reg_flags=reg_flags,
+            .triesHandlers=NULL
+    };
+    jvalue value = vmInterpret(env, &code, &dvmResolver);
+
+    return value.z;
+}
+
+static jstring myConstString(JNIEnv *env, u4 idx) {
+    jclass cls = env->FindClass("com/nmmedit/vm/VmTest");
+    jmethodID methodId = env->GetStaticMethodID(cls, "myConst", "(I)Ljava/lang/String;");
+    return static_cast<jstring>(env->CallStaticObjectMethod(cls, methodId, (jint) idx));
+}
+
+
+JNIEXPORT jboolean Java_com_nmmedit_vm_VmTest_constString1
+        (JNIEnv *env, jclass clazz) {
+
+    const DexCode *dexCode = findDexCode("Lcom/nmmedit/vm/VmTest;", "constString");
+    if (dexCode == NULL) {
+        return JNI_FALSE;
+    }
+
+    u2 registersSize = dexCode->registersSize;
+
+    regptr_t *regs = (regptr_t *) calloc(registersSize, sizeof(regptr_t));
+    u1 *reg_flags = (u1 *) calloc(registersSize, sizeof(u1));
+
+    const u2 *insns = dexCode->insns;
+    u4 insnsSize = dexCode->insnsSize;
+    const vmCode code = {
+            .insns=insns,
+            .insnsSize=insnsSize,
+            .regs=regs,
+            .reg_flags=reg_flags,
+            .triesHandlers=NULL
+    };
+
+    //替换constString方法
+    dvmResolver.dvmConstantString = myConstString;
+
+    jvalue value = vmInterpret(env, &code, &dvmResolver);
+
+    return value.z;
+}
+
+static jobject Java_com_nmmedit_vm_TestJniRegisterNatives_getRealOwner
+        (JNIEnv *env, jobject obj) {
+    return nullptr;
+}
+
+JNIEXPORT void Java_com_nmmedit_vm_TestJniRegisterNatives_initClass
+        (JNIEnv *env, jclass clazz) {
+    jclass cls = env->FindClass("com/nmmedit/vm/TestJniRegisterNatives");
+    JNINativeMethod methods = {
+            .fnPtr=(void *) (Java_com_nmmedit_vm_TestJniRegisterNatives_getRealOwner),
+            .name="getRealOwner",
+            .signature="()Ljava/lang/Object;"
+    };
+
+    env->RegisterNatives(cls, &methods, 1);
+}
+
+
+//测试android6下调用jna函数问题
+jstring constString2(JNIEnv *env, u4 idx) {
+    const char *str = dexStringById(pDex, idx);
+    ALOGD("resolve string %s", str);
+    jstring pJstring = env->NewStringUTF(str);
+//    jobject gstr = env->NewGlobalRef(pJstring);
+    return pJstring;
+}
+
+JNIEXPORT void Java_com_nmmedit_vm_VmTest_callJna0
+        (JNIEnv *env, jclass clazz) {
+
+    const DexCode *dexCode = findDexCode("Lcom/nmmedit/vm/VmTest;", "callJna");
+    if (dexCode == NULL) {
+        return;
+    }
+
+    u2 registersSize = dexCode->registersSize;
+
+    regptr_t *regs = (regptr_t *) calloc(registersSize, sizeof(regptr_t));
+    u1 *reg_flags = (u1 *) calloc(registersSize, sizeof(u1));
+
+    const u2 *insns = dexCode->insns;
+    u4 insnsSize = dexCode->insnsSize;
+    const vmCode code = {
+            .insns=insns,
+            .insnsSize=insnsSize,
+            .regs=regs,
+            .reg_flags=reg_flags,
+            .triesHandlers=NULL
+    };
+
+    //替换constString方法
+    dvmResolver.dvmConstantString = constString2;
+
+    jvalue value = vmInterpret(env, &code, &dvmResolver);
+}
+
+
+JNIEXPORT void Java_com_nmmedit_vm_VmTest_callJnaPassStr
+        (JNIEnv *env, jclass clazz) {
+    jclass testCls = env->FindClass("com/nmmedit/jna/TestJna");
+    jfieldID fid = env->GetStaticFieldID(testCls, "INSTANCE", "Lcom/nmmedit/jna/TestJna;");
+    jmethodID passStrMethodId = env->GetMethodID(testCls, "pass_str", "(Ljava/lang/String;)V");
+
+    jobject instance = env->GetStaticObjectField(testCls, fid);
+    //创建参数
+    jstring arg = env->NewStringUTF("Hello world");
+    jvalue args[1];
+    args[0].l=arg;
+    //调用pass_str
+    env->CallVoidMethodA(instance, passStrMethodId, args);
+}
 
 
 #ifdef __cplusplus

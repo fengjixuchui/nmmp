@@ -6,12 +6,13 @@ import android.util.LongSparseArray;
 
 import androidx.annotation.Keep;
 
+import com.nmmedit.jna.TestJna;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-
 
 
 public class VmTest extends ArrayList {
@@ -22,6 +23,7 @@ public class VmTest extends ArrayList {
 
     public static native void loadDex0(byte[] dex);
 
+    //整数运算
     public static int iadd(int a, int b) {
         return a + b;
     }
@@ -29,6 +31,7 @@ public class VmTest extends ArrayList {
     public static native int iadd0(int a, int b);
 
 
+    //长整数及方法调用
     public static long ladd(long a, long b) {
         long max = Math.max(a, b);
         return a + b - 6;
@@ -37,6 +40,7 @@ public class VmTest extends ArrayList {
     public static native long ladd0(long a, long b);
 
 
+    //跳转指令,判断指令是否正常
     public static int loop(int count) {
         int sum = 0;
         for (int i = 0; i < count; i++) {
@@ -49,6 +53,7 @@ public class VmTest extends ArrayList {
 
     public static int f = 3;
 
+    //静态域测试
     public static int sfieldGet() {
         return f;
     }
@@ -63,6 +68,7 @@ public class VmTest extends ArrayList {
 
     public int v = 3;
 
+    //实例域相关测试
     public int ifieldGet() {
         return v;
     }
@@ -83,6 +89,8 @@ public class VmTest extends ArrayList {
         return id;
     }
 
+
+    //两条switch指令,只测试一条,另外的没测试,实际也是正确的
 
     public static int packedSwitch(int key) {
         switch (key) {
@@ -106,12 +114,14 @@ public class VmTest extends ArrayList {
 
     public static native int packedSwitch0(int key);
 
+    //测试取得数组元素
     public static int aget(int[] arr, int idx) {
         return arr[idx];
     }
 
     public static native int aget0(int[] arr, int idx);
 
+    //测试设置数组元素
     public static String aput(String[] arr, int idx, String val) {
         arr[idx] = val;
         return val;
@@ -130,6 +140,7 @@ public class VmTest extends ArrayList {
 
     public static native String filledNewArray0(int idx);
 
+    //测试异常处理是否正常
     public void tryCatch() throws IOException {
         synchronized (this) {
             try {
@@ -198,6 +209,7 @@ public class VmTest extends ArrayList {
         Three
     }
 
+    //测试if-eq,if-ne指令,比较对象
     public static Day getDay() {
         return Day.One;
     }
@@ -206,6 +218,7 @@ public class VmTest extends ArrayList {
 
     private LongSparseArray<Bitmap> bitmapSurface = new LongSparseArray<>(5);
 
+    //测试参数传递问题,有long/double时是否能正确传递
     public Canvas initBitmap(long nativeSurface, int width, int height) {
 //        Log.d(TAG, "initBitmap: " + nativeSurface);
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
@@ -226,4 +239,53 @@ public class VmTest extends ArrayList {
     public static native void byteBuffer0(ByteBuffer buffer);
 
 
+    //java执行会抛空指针异常
+    public static void throwNull() throws IOException {
+        IOException e = null;
+        throw e;
+    }
+
+    //测试当异常为null时throw指令是否正常抛异常
+    public native static void throwNull0() throws IOException;
+
+    //todo const-string指令相关问题,
+
+    public static String S = "string";
+
+    //这个方法被native化,通过vm执行
+    public static boolean constString() {
+        // java执行的话为true,但是通过vm执行这个只能是false
+        // 如果要和java保持一致的话,比如可以在处理dex生成一个Constants的类包含String constString(int idx)方法,
+        // 里面一个字符串数组,包含所有const-string*需要的字符串,jni不再通过NewStringUTF创建字符串,
+        // 而是通过调用constString得到字符串,这样可以保证S和"string"是同一对象
+        return S == "string";
+    }
+
+    public native static boolean constString0();
+
+
+    //验证jni从java层加载字符串常量可以保证字符串对象一致
+
+    public static String myConst(int idx) {
+        return "string";
+    }
+
+    public native static boolean constString1();
+
+    //测试native化后,在安卓6下传递对象到jna方法错误问题
+    public static void callJna() {
+        String s = "hello world";
+        TestJna.INSTANCE.pass_str(s);
+    }
+
+    //callJna native化后
+    public native static void callJna0();
+
+    // 手写jni代码去调用pass_str,
+    // 经过测试在android6上面依然还会崩溃, 所以vm部分应该没问题, 问题出在
+    // android6的art或者jna
+    public native static void callJnaPassStr();
+
 }
+
+

@@ -1531,8 +1531,10 @@ jvalue vmInterpret(
         vsrc1 = INST_B(inst);
         arrayObj = (jarray) GET_REGISTER_AS_OBJECT(vsrc1);
         ILOGV("|array-length v%d,v%d  (%p)", vdst, vsrc1, arrayObj);
-        if (arrayObj == NULL)
+        if (arrayObj == NULL) {
+            dvmThrowNullPointerException(env, NULL);
             GOTO_exceptionThrown();
+        }
 
         arrayLength = env->GetArrayLength(arrayObj);
         SET_REGISTER(vdst, arrayLength);
@@ -1643,6 +1645,7 @@ jvalue vmInterpret(
         if (obj == NULL) {
             /* will throw a null pointer exception */
             LOGVV("Bad exception");
+            dvmThrowNullPointerException(env, NULL);
         } else {
             /* use the requested exception */
             env->Throw(obj);
@@ -1922,6 +1925,7 @@ HANDLE_OP_AGET(OP_AGET_WIDE, "-wide", {
         ILOGV("|aget%s v%d,v%d,v%d", "-object", vdst, vsrc1, vsrc2);
         arrayObj = (jobjectArray) GET_REGISTER_AS_OBJECT(vsrc1);
         if (arrayObj == NULL) {
+            dvmThrowNullPointerException(env, NULL);
             GOTO_exceptionThrown();
         }
         u4 idx = GET_REGISTER(vsrc2);

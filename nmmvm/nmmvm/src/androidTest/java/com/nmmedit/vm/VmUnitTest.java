@@ -42,7 +42,7 @@ public class VmUnitTest {
         assertEquals("com.nmmedit.vm.test", appContext.getPackageName());
     }
 
-//    @Before
+    @Before
     public void before() {
         Context appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
         publicSourceDir = appContext.getPackageCodePath();
@@ -51,6 +51,7 @@ public class VmUnitTest {
             Enumeration<? extends ZipEntry> entries = zipFile.entries();
             while (entries.hasMoreElements()) {
                 ZipEntry zipEntry = entries.nextElement();
+                //需要查找VmTest这个类在debug版本apk哪个dex里,测试版apk在build/outputs/apk/androidTest/debug目录下
                 if (zipEntry.getName().equals("classes2.dex")) {
                     InputStream stream = zipFile.getInputStream(zipEntry);
                     ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -251,8 +252,6 @@ public class VmUnitTest {
     public native static void passClass0(Class<?> clazz);
 
 
-
-
     @Test
     public void testStaticField() {
         System.loadLibrary("nmmp");
@@ -263,4 +262,50 @@ public class VmUnitTest {
         final Object obj = FieldTest.getObj();
         assert obj != obj0;
     }
+
+
+    @Test
+    public void testThrow() throws IOException {
+        try {
+            VmTest.throwNull();
+        } catch (NullPointerException e) {
+
+        }
+
+        VmTest.throwNull0();
+
+    }
+
+    @Test
+    public void testConstString() throws IOException {
+        final boolean b = VmTest.constString();
+        System.out.println(b);
+        final boolean b1 = VmTest.constString0();
+        System.out.println(b1);
+        assert b != b1;
+        // 新的const-string实现
+        final boolean b2 = VmTest.constString1();
+        System.out.println(b2);
+
+        assert b == b2;
+
+    }
+
+
+    @Test
+    public void testPrivateMethod(){
+        final TestJniRegisterNatives inflater = new TestJniRegisterNatives();
+        final Object realOwner = inflater.getRealOwner();
+    }
+
+    @Test
+    public void testPassStringJna(){
+        VmTest.callJna0();
+    }
+
+    @Test
+    public void testJniCallJnaPassStr(){
+        VmTest.callJnaPassStr();
+    }
 }
+
